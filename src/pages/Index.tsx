@@ -28,7 +28,7 @@ const Index = () => {
             <div className="h-8 w-8 bg-gradient-primary rounded-lg flex items-center justify-center">
               <GitBranch className="h-4 w-4 text-primary-foreground" />
             </div>
-            <h1 className="text-xl font-bold text-foreground">n8n Workflow Studio</h1>
+            <h1 className="text-xl font-bold text-foreground">agen8</h1>
           </div>
         </div>
         
