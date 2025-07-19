@@ -1,0 +1,195 @@
+export interface N8nNode {
+  id: string;
+  name: string;
+  type: string;
+  position: [number, number];
+  parameters: Record<string, any>;
+  credentials?: Record<string, any>;
+  disabled?: boolean;
+  notes?: string;
+  webhookId?: string;
+}
+
+export interface N8nWorkflow {
+  id?: string;
+  name: string;
+  nodes: N8nNode[];
+  connections: Record<string, Record<string, any[][]>>;
+  active: boolean;
+  settings: Record<string, any>;
+  staticData?: Record<string, any>;
+  tags?: string[];
+  meta?: Record<string, any>;
+}
+
+const SYSTEM_PROMPT = `You are an expert n8n workflow designer. Your task is to convert natural language descriptions into valid n8n workflow JSON.
+
+Key guidelines:
+1. Always include a "Start" node as the first node
+2. Use appropriate n8n node types (e.g., n8n-nodes-base.emailTrigger, n8n-nodes-base.googleDrive, n8n-nodes-base.slack)
+3. Position nodes logically from left to right
+4. Create proper connections between nodes
+5. Include reasonable default parameters for each node
+6. Generate a workflow name based on the description
+7. Return ONLY valid JSON, no explanations
+
+Common n8n node types:
+- n8n-nodes-base.start (Start node)
+- n8n-nodes-base.webhook (Webhook trigger)
+- n8n-nodes-base.emailTrigger (Email trigger)
+- n8n-nodes-base.cron (Schedule trigger)
+- n8n-nodes-base.httpRequest (HTTP request)
+- n8n-nodes-base.slack (Slack)
+- n8n-nodes-base.googleDrive (Google Drive)
+- n8n-nodes-base.airtable (Airtable)
+- n8n-nodes-base.mysql (MySQL)
+- n8n-nodes-base.s3 (AWS S3)
+- n8n-nodes-base.sms (SMS)
+- n8n-nodes-base.discord (Discord)
+- n8n-nodes-base.github (GitHub)
+
+Example response structure:
+{
+  "name": "Email to Drive Backup",
+  "nodes": [
+    {
+      "id": "start",
+      "name": "Start",
+      "type": "n8n-nodes-base.start",
+      "position": [250, 300],
+      "parameters": {}
+    },
+    {
+      "id": "email_trigger",
+      "name": "Email Trigger",
+      "type": "n8n-nodes-base.emailTrigger",
+      "position": [450, 300],
+      "parameters": {
+        "mailbox": "INBOX",
+        "format": "simple"
+      }
+    }
+  ],
+  "connections": {
+    "Start": {
+      "main": [
+        [
+          {
+            "node": "Email Trigger",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {},
+  "tags": []
+}`;
+
+export async function generateWorkflow(prompt: string, model: 'openai' | 'gemini', apiKey?: string): Promise<N8nWorkflow> {
+  if (!prompt || prompt.trim().length === 0) {
+    throw new Error('Prompt is required');
+  }
+
+  // Use provided API key or show error for missing key
+  if (!apiKey) {
+    const modelName = model === 'openai' ? 'OpenAI' : 'Gemini';
+    throw new Error(`${modelName} API key is required. Please add your API key in settings.`);
+  }
+
+  let response: Response;
+  
+  if (model === 'openai') {
+    response = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: 'gpt-4',
+        messages: [
+          {
+            role: 'system',
+            content: SYSTEM_PROMPT
+          },
+          {
+            role: 'user',
+            content: `Create an n8n workflow for: ${prompt}`
+          }
+        ],
+        temperature: 0.7,
+        max_tokens: 2000,
+      }),
+    });
+  } else {
+    // Gemini API
+    response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        contents: [{
+          parts: [{
+            text: `${SYSTEM_PROMPT}\n\nCreate an n8n workflow for: ${prompt}`
+          }]
+        }],
+        generationConfig: {
+          temperature: 0.7,
+          maxOutputTokens: 2000,
+        }
+      }),
+    });
+  }
+
+  if (!response.ok) {
+    const errorData = await response.json();
+    const modelName = model === 'openai' ? 'OpenAI' : 'Gemini';
+    const errorMessage = model === 'openai' 
+      ? errorData.error?.message 
+      : errorData.error?.message || errorData.message;
+    throw new Error(`${modelName} API error: ${errorMessage || 'Unknown error'}`);
+  }
+
+  const data = await response.json();
+  const workflowJson = model === 'openai' 
+    ? data.choices[0]?.message?.content
+    : data.candidates[0]?.content?.parts[0]?.text;
+
+  if (!workflowJson) {
+    throw new Error('No workflow generated');
+  }
+
+  // Try to parse the JSON to validate it
+  let workflow: N8nWorkflow;
+  try {
+    workflow = JSON.parse(workflowJson);
+  } catch (parseError) {
+    // If parsing fails, try to extract JSON from the response
+    const jsonMatch = workflowJson.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      workflow = JSON.parse(jsonMatch[0]);
+    } else {
+      throw new Error('Invalid JSON generated by AI');
+    }
+  }
+
+  // Validate the workflow structure
+  if (!workflow.nodes || !Array.isArray(workflow.nodes)) {
+    throw new Error('Invalid workflow: missing or invalid nodes');
+  }
+
+  if (!workflow.connections || typeof workflow.connections !== 'object') {
+    workflow.connections = {};
+  }
+
+  // Ensure required fields
+  workflow.active = workflow.active ?? false;
+  workflow.settings = workflow.settings ?? {};
+  workflow.tags = workflow.tags ?? [];
+
+  return workflow;
+}
